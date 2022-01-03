@@ -22,7 +22,7 @@ python3 -c 'import ray; from pyarrow import plasma as plasma; plasma.build_plasm
 python3 ray_experiments.py train --objective_type OBJECTIVE_TYPE --reset_prob 0.0
 ```
 
-Example OBJECTIVE_TYPE: learned-reinforce-3factor-scalar-withstate
+Example OBJECTIVE_TYPE: learned-withstate-rank1
 By default, this requires a local machine with 4 GPUs to run 20 agents in parallel.
 
 ## Meta Testing
