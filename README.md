@@ -1,7 +1,4 @@
-# MetaGenRL: Improving Generalization in Meta Reinforcement Learning using Learned Objectives
-
-This is the official research code for the paper Kirsch et al. 2019:
-"Improving Generalization in Meta Reinforcement Learning using Learned Objectives".
+Based off https://github.com/louiskirsch/metagenrl
 
 ## Installation
 
