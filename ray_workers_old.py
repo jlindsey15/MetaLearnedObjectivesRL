@@ -90,14 +90,6 @@ class AgentWorker:
         import tensorflow as tf
         plasma.load_plasma_tensorflow_op()
 
-        #Uncomment this blog to debug
-        '''
-        config = tf.ConfigProto()
-        config.gpu_options.allow_growth = True
-        self.sess = tf.Session(config=config)
-        self.locals = self._setup(self.dconfig, self.logdir)
-        '''
-        
         logger.warning(f'Created agent {worker_index}')
 
     def setup(self):
@@ -170,23 +162,16 @@ class AgentWorker:
         # Optimizers
         pi_optimizer = utils.TensorAdamOptimizer(learning_rate=dconfig.policy_learning_rate * lr_progress)
         q_optimizer = tf.train.AdamOptimizer(learning_rate=dconfig.critic_learning_rate)
-        #q_optimizer_ground_truth = tf.train.AdamOptimizer(learning_rate=dconfig.critic_learning_rate)
         obj_optimizer = tf.train.AdamOptimizer(learning_rate=dconfig.obj_func_learning_rate)
 
         # Main outputs from computation graph
         main = agent.main
-        #ground_truth_main = agent.ground_truth
-        
         policy = main.policy(x_ph, seq_len=lens_ph)
         pi_action = policy.action
         q1_pi = policy.value
-        pi_behv = main.policy(x_ph_behv[:, tf.newaxis], initial_state=init_policy_state) #policy network
+        pi_behv = main.policy(x_ph_behv[:, tf.newaxis], initial_state=init_policy_state)
         q1 = main.critic(x_ph, a_ph)
         q2 = main.critic2(x_ph, a_ph)
-        
-        #q1_ground_truth = ground_truth_main.critic(x_ph, a_ph)
-        #q2_ground_truth = ground_truth_main.critic2(x_ph, a_ph)
-        
         obj = objective.objective(x_ph, a_ph, transition, lens_ph, seq_mask, agent, policy)
 
         # Target policy network
@@ -200,17 +185,11 @@ class AgentWorker:
         a2 = tf.clip_by_value(a2, -act_limit, act_limit)
         q1_targ = agent.target.critic(x2_ph, a2)
         q2_targ = agent.target.critic2(x2_ph, a2)
-        
-        #q1_ground_truth_targ = agent.ground_truth_target.critic(x2_ph, a2)
-        #q2_ground_truth_targ = agent.ground_truth_target.critic2(x2_ph, a2)
 
         # Bellman backup for Q functions, using Clipped Double-Q targets
         min_q_targ = tf.minimum(q1_targ, q2_targ)
         gamma = dconfig.discount_factor
         backup = tf.stop_gradient(r_ph + gamma * (1 - d_ph) * min_q_targ + d_ph)
-        
-        #min_q_targ_ground_truth = tf.minimum(q1_ground_truth_targ, q2_ground_truth_targ)
-        #backup_ground_truth = tf.stop_gradient(r_ph + gamma * (1 - d_ph) * min_q_targ_ground_truth + d_ph)
 
         # Objective function annealing
         if dconfig.obj_func_anneal_steps:
@@ -224,20 +203,8 @@ class AgentWorker:
         q2_loss = tf.reduce_mean((q2-backup)**2 * seq_mask)
         q_loss = q1_loss + q2_loss
 
-        
-        #q1_loss_ground_truth = tf.reduce_mean((q1_ground_truth-backup_ground_truth)**2 * seq_mask)
-        #q2_loss_ground_truth = tf.reduce_mean((q2_ground_truth-backup_ground_truth)**2 * seq_mask)
-        #q_loss_ground_truth = q1_loss_ground_truth + q2_loss_ground_truth
-        
-        
         main_vars = sorted(get_vars('main', trainable_only=False), key=lambda v: v.name)
         target_vars = sorted(get_vars('target', trainable_only=False), key=lambda v: v.name)
-        
-        #main_vars_ground_truth = sorted(get_vars('ground_truth_m', trainable_only=False), key=lambda v: v.name)
-        #target_vars_ground_truth = sorted(get_vars('ground_truth_t', trainable_only=False), key=lambda v: v.name)
-        
-        #main_vars_policy = sorted(get_vars('main/policy', trainable_only=False), key=lambda v: v.name)
-        #target_vars_policy = sorted(get_vars('target/policy', trainable_only=False), key=lambda v: v.name)
 
         # Train policy directly using critic
         train_pi_op = self._clipped_minimize(pi_optimizer, pi_loss, get_vars('main/policy'),
@@ -247,8 +214,6 @@ class AgentWorker:
                                                  grad_name='objective_policy_grads')
         # Train critic
         train_q_op = q_optimizer.minimize(q_loss, var_list=get_vars('main/critic'))
-        #train_q_op_ground_truth = q_optimizer_ground_truth.minimize(q_loss_ground_truth, var_list=get_vars('ground_truth_m/critic'))
-        
         tf.summary.histogram('policy_params', utils.flat(get_vars('main/policy')))
 
         # Objective function loss
@@ -283,14 +248,14 @@ class AgentWorker:
                                                                   plasma_store_socket_name=store_socket)
 
         # Print number of parameters
-        #print(f'''
-        #===================================================================
-        #Parameters
-        #Policy {np.sum(np.prod(v.shape) for v in get_vars('main/policy'))}
-        #Critic {np.sum(np.prod(v.shape) for v in get_vars('main/critic'))}
-        #Objective {np.sum(np.prod(v.shape) for v in obj_vars)}
-        #===================================================================
-        #''')
+        print(f'''
+        ===================================================================
+        Parameters
+        Policy {np.sum(np.prod(v.shape) for v in get_vars('main/policy'))}
+        Critic {np.sum(np.prod(v.shape) for v in get_vars('main/critic'))}
+        Objective {np.sum(np.prod(v.shape) for v in obj_vars)}
+        ===================================================================
+        ''')
 
         # Polyak averaging for target variables
         polyak = 1 - dconfig.target_network_update_speed
@@ -301,17 +266,8 @@ class AgentWorker:
         target_init = tf.group([tf.assign(v_targ, v_main)
                                 for v_main, v_targ in zip(main_vars, target_vars)])
 
-
-        #target_update_ground_truth = tf.group([tf.assign(v_targ, polyak*v_targ + (1-polyak)*v_main)
-        #                          for v_main, v_targ in zip(main_vars_ground_truth, target_vars_ground_truth)])
-
-        # Initializing target networks to match main variables
-        #target_init_ground_truth = tf.group([tf.assign(v_targ, v_main)
-        #                        for v_main, v_targ in zip(main_vars_ground_truth, target_vars_ground_truth)])
-
         # Ops for copying and resetting the policy (currently not used)
         reset_policy = tf.variables_initializer(main_vars)
-        
         copy_policy = tf.group([tf.assign(v_targ, v_main)
                                 for v_main, v_targ in zip(main_vars, target_vars)])
         
@@ -334,7 +290,7 @@ class AgentWorker:
         self.sess = tf.Session(config=config)
         self.sess.run(tf.global_variables_initializer())
 
-        init_ops = [target_init]#, target_init_ground_truth]
+        init_ops = [target_init]
         self.sess.run(init_ops)
 
         rb_handle, large_rb_handle = self.sess.run([replay_buffer_dataset_iterator.string_handle(),
@@ -401,7 +357,7 @@ class AgentWorker:
             for _ in range(self.dconfig.max_episode_length or 10 ** 10):
                 t = ep_len + timesteps_total
                 start_steps = self.dconfig.policy_random_exploration_steps
-                if t > start_steps: #burn-in period for replay buffer to get filled
+                if t > start_steps:
                     a, state = get_action(obs, self.dconfig.policy_exploration, state)
                 else:
                     a = env.action_space.sample()
@@ -455,7 +411,7 @@ class AgentWorker:
 
     def update_critic(self, t):
         self.feed_dict = self._generate_feed_dict(t, self.locals.rb_handle)
-        q_step_ops = [self.locals.train_q_op]#, self.locals.train_q_op_ground_truth]
+        q_step_ops = [self.locals.train_q_op]
         self.sess.run(q_step_ops, self.feed_dict)
 
     def update_policy(self):
@@ -464,7 +420,7 @@ class AgentWorker:
         else:
             policy_op = self.locals.train_pi_op
 
-        ops = [policy_op, self.locals.target_update]#, self.locals.target_update_ground_truth]
+        ops = [policy_op, self.locals.target_update]
 
         self.sess.run(ops, self.feed_dict)
 

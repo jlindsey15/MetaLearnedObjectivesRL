@@ -37,6 +37,7 @@ def test(objective_dir='', chkp=-1):
         'obj_func_anneal_steps': 0,
         'policy_update_start': 0,
         'policy_random_exploration_steps': 10 * 1000,
+        'policy_reset_prob': 0,
 
     })
     return config
@@ -57,6 +58,7 @@ def reinforce_test():
         'obj_func_anneal_steps': 0,
         'policy_update_start': 0,
         'policy_random_exploration_steps': 10 * 1000,
+        'policy_reset_prob': 0,
     })
     return config
 
@@ -121,7 +123,7 @@ def base(agent_count=8):
         'policy_update_start': 0,
         'policy_clip': True,
         'policy_exploration': 0.1,
-        'policy_reset_prob': 0,
+        'policy_reset_prob': 0.000005,
         'policy_random_exploration_steps': 10 * 1000,
 
         'obj_func_enabled': True,
@@ -143,4 +145,5 @@ def base(agent_count=8):
         'obj_func_second_order_steps': 1,
         'obj_func_update_delay': 2,
         'obj_func_anneal_steps': 10 * 1000,
+        'n_vec': 10
     }

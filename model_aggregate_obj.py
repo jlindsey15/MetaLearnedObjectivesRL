@@ -75,8 +75,8 @@ class Agent:
         with tf.variable_scope(None, 'agent'):
             self.main = self._create('main')
             self.target = self._create('target')
-            #self.ground_truth = self._create_gt('ground_truth_m')
-            #self.ground_truth_target = self._create_gt('ground_truth_t')
+            #self.ground_truth = self._create_gt('ground_truth_main')
+            #self.ground_truth_target = self._create_gt('ground_truth_target')
 
     def _create(self, scope):
         with tf.variable_scope(scope):
@@ -111,7 +111,7 @@ class Agent:
         result = {
             'action': pi,
             'hidden': policy.hidden,
-            'value': self.main.critic(x, pi), #computing Q(s, a)
+            'value': self.main.critic(x, pi),
             'target_value': lambda: self.target.critic(x, pi),
         }
         if hasattr(policy, 'state'):
@@ -126,13 +126,24 @@ class Objective:
 
     def __init__(self, dconfig):
         self.dconfig = dconfig
+        
+        if dconfig.critic_is_recurrent:
+            critic_args = [dconfig.critic_depth, dconfig.critic_units, dconfig.critic_rnn_activation,
+                           dconfig.critic_layernorm]
+            self.critic_func = lambda *args, **kwargs: recurrent(*args, *critic_args, **kwargs)
+        else:
+            critic_args = [dconfig.critic_depth, dconfig.critic_units, dconfig.critic_activation,
+                           dconfig.critic_layernorm]
+            self.critic_func = lambda *args, **kwargs: mlp(*args, *critic_args, **kwargs)
+        
         self.objective = tf.make_template('objective', self._create_objective, True)
+        
+        self.ground_truth = self._create_gt('objective_main')
+        self.ground_truth_target = self._create_gt('objective_target')
 
         obj_args = [dconfig.obj_func_depth, dconfig.obj_func_units, dconfig.obj_func_activation,
                     dconfig.obj_func_layernorm]
         self.obj_func = lambda *args, **kwargs: mlp(*args, *obj_args, **kwargs)
-        
-        self.obj_func_rank1 = lambda *args, **kwargs: mlp(*args, 0, 0, None, None, **kwargs)
         
         #vector_args = [0, -1, None, False]
         #self.vector_transform = lambda  *args, **kwargs: mlp(*args, *vector_args, **kwargs)
@@ -147,25 +158,21 @@ class Objective:
         else:
             self.input_transform = None
             
-    def _objective_reward_value_transform2(self, values, rewards, terminals, create_summary, extra=False):
-        """
-        First transformation on objective inputs
-        """
-        normalized_rewards = utils.z_normalize_online(rewards, axes=[0, 1])
+            
         
-
-        time = tf.tile(tf.range(0, rewards.shape[1].value, dtype=tf.float32)[tf.newaxis, :, tf.newaxis],
-                       [tf.shape(values)[0], 1, 1])
-        #print('BOOP', normalized_values.shape, normalized_rewards.shape, terminals.shape)
-        if extra:
-            inp = tf.concat([normalized_rewards, time / rewards.shape[1].value, terminals], axis=-1)
-        else:
-            inp = normalized_rewards#tf.concat([normalized_rewards, time / rewards.shape[1].value], axis=-1)
-
-        if create_summary:
-            tf.summary.histogram('obj_input', inp)
-        return self.input_transform(inp, use_layernorm=self.dconfig.obj_func_input_transform_layernorm,
-                                    output_units=self.dconfig.obj_func_input_transform_out_units)
+    def _create_gt(self, scope):
+        with tf.variable_scope(scope):
+            replace_manager = utils.ReplaceVariableManager()
+            return utils.DotDict({
+                'critic': tf.make_template('critic', self._critic, True),
+                'critic2': tf.make_template('critic2', self._critic, True),
+            })
+            
+            
+    def _critic(self, x, a, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        value = tf.squeeze(self.critic_func(tf.concat([x, a], axis=-1), 1, **kwargs).out, axis=-1)
+        return value
 
     def _objective_reward_value_transform(self, values, rewards, terminals, create_summary):
         """
@@ -209,7 +216,7 @@ class Objective:
         return error 
     
     
-    def _objective_error_transform2(self, inp, action_error=None, fake=False, rank1=False):
+    def _objective_error_transform2(self, inp, action_error=None, fake=False):
         """
         Takes a vector and transforms it to a bounded scalar error
         """
@@ -217,8 +224,6 @@ class Objective:
         use_error_func = self.dconfig.obj_func_error_func is not None
         if fake:
             error = self.obj_func(inp, 1, output_bias=use_error_func).out
-        elif rank1:
-            error = self.obj_func_rank1(self.obj_func(inp, 1, output_bias=use_error_func).out, action_error.shape[-1]).out
         else:
             error = self.obj_func(inp, action_error.shape[-1], output_bias=use_error_func).out
 
@@ -238,7 +243,7 @@ class Objective:
     def _create_objective(self, x, a, trans, seq_len, seq_mask, agent, policy, create_summary=False):
         ftype = self.dconfig.obj_func_type
 
-        if 'learned' in ftype:#ftype == 'learned-reinforce' or ftype ==  'learned-reinforce-gradcritic' or ftype == 'learned-reinforce-3factor-scalar' or ftype == 'learned-reinforce-3factor-vector' or ftype == 'learned-reinforce-nocritic' or ftype == 'learned-reinforce-noaction' or ftype == 'learned-reinforce-3factor-scalar-fake' or ftype == 'learned-reinforce-3factor-scalar-rank1' or ftype == 'learned-reinforce-3factor-scalar-fake-noaction' or ftype == 'learned-reinforce-3factor-scalar-rank1-noaction' or ftype == 'learned-reinforce-3factor-scalar-noaction'  or ftype == 'learned-reinforce-3factor-scalar-withstate' or ftype == 'learned-reinforce-3factor-scalar-fake-withstate' or ftype == 'learned-reinforce-3factor-scalar-rank1-withstate':
+        if ftype == 'learned-reinforce' or ftype ==  'learned-reinforce-gradcritic' or ftype == 'learned-reinforce-3factor-scalar' or ftype == 'learned-reinforce-3factor-vector' or ftype == 'learned-reinforce-nocritic' or ftype == 'learned-reinforce-noaction' or ftype == 'learned-reinforce-3factor-scalar-fake' or ftype == 'learned-reinforce-3factor-scalar-fake-noaction' or ftype == 'learned-reinforce-3factor-scalar-noaction'  or ftype == 'learned-reinforce-3factor-scalar-withstate' or ftype == 'learned-reinforce-3factor-scalar-fake-withstate':
             # Only support entire trajectories and non recurrent critics at the moment
             assert self.dconfig.recurrent_time_steps > 1
             assert not self.dconfig.critic_is_recurrent
@@ -261,10 +266,9 @@ class Objective:
             else:
                 final_value = agent.main.policy(final_input).value
 
-            #values refers to Q values from agent's critic
-            if "gradcritic" in ftype:
+            if ftype == 'learned-reinforce-gradcritic':
                 values = tf.concat([policy.value, final_value[:, tf.newaxis]], axis=1)
-            elif "nocritic" in ftype:
+            elif ftype == 'learned-reinforce-nocritic':
                 values = tf.stop_gradient(tf.concat([policy.value, final_value[:, tf.newaxis]], axis=1) * 0)
             else:
                 values = tf.stop_gradient(tf.concat([policy.value, final_value[:, tf.newaxis]], axis=1))
@@ -280,60 +284,30 @@ class Objective:
             
             #terminals = tf.concat([terminals for ii in range(self.dconfig.n_vec)], axis=-1)
             #print('BEEEEP', values.shape, rewards.shape, terminals.shape)
-            if "nocritic" in ftype:
-                if 'extra' in ftype:
-                    transformed_other_inputs = self._objective_reward_value_transform2(values, rewards, terminals,
-                                                                              create_summary, extra=True)
-                else:
-                    transformed_other_inputs = self._objective_reward_value_transform2(values, rewards, terminals,
-                                                                              create_summary)
-            else:
-                transformed_other_inputs = self._objective_reward_value_transform(values, rewards, terminals,
+            transformed_other_inputs = self._objective_reward_value_transform(values, rewards, terminals,
                                                                               create_summary)
             
-            inputs_to_use = []
-            if 'withstate' in ftype: #state not included by default
-                inputs_to_use.append(x2)
-            if 'noaction' not in ftype: #action included by default
-                inputs_to_use.append(obj_action_input)
-            inputs_to_use.append(transformed_other_inputs)
-            
-            rnn_input = tf.unstack(tf.concat(inputs_to_use, axis=-1), axis=1)[::-1]
-            
-            '''
-            if ftype == 'learned-reinforce-3factor-scalar-fake-noaction' or ftype == 'learned-reinforce-3factor-scalar-rank1-noaction' or ftype == 'learned-reinforce-3factor-scalar-noaction':
+            if ftype == 'learned-reinforce-3factor-scalar-fake-noaction' or ftype == 'learned-reinforce-3factor-scalar-noaction':
                 rnn_input = tf.unstack(tf.concat([transformed_other_inputs], axis=-1), axis=1)[::-1]
-            elif ftype == 'learned-reinforce-3factor-scalar-withstate' or ftype == 'learned-reinforce-3factor-scalar-fake-withstate' or ftype == 'learned-reinforce-3factor-scalar-rank1-withstate':
+            elif ftype == 'learned-reinforce-3factor-scalar-withstate' or ftype == 'learned-reinforce-3factor-scalar-fake-withstate':
                 rnn_input = tf.unstack(tf.concat([x2, obj_action_input, transformed_other_inputs], axis=-1), axis=1)[::-1]
             else:
                 rnn_input = tf.unstack(tf.concat([obj_action_input, transformed_other_inputs], axis=-1), axis=1)[::-1]
 
-            '''
             lstm_cell = tf.nn.rnn_cell.LSTMCell(num_units=self.dconfig.obj_func_lstm_units)
             outputs, _ = tf.nn.static_rnn(lstm_cell, rnn_input, dtype=tf.float32, sequence_length=seq_len)
-            
-            #"outputs" is A or A_vec or A'
             outputs = tf.stack(outputs[::-1], axis=1)
 
             
-            #3 cases
-            #'fake' means scalar A(inputs)
-            #'rank1' means A_vec = A'(inputs) * (learned vector), where A' is a scalar
-            #equivalent interpretation: learning A_vec, but forcing the second to last layer to have one unit
-            #neither means A_vec(inputs), a vector, each vector component independent of the others
             
-            if ('fake' not in ftype) and ('rank1' not in ftype):#ftype == 'learned-reinforce-3factor-scalar' or ftype == 'learned-reinforce-3factor-scalar-noaction' or ftype == 'learned-reinforce-3factor-scalar-withstate':
+            if ftype == 'learned-reinforce-3factor-scalar' or ftype == 'learned-reinforce-3factor-scalar-noaction' or ftype == 'learned-reinforce-3factor-scalar-withstate':
                 action_error = (rb_action - policy.action) ** 2
                 return self._objective_error_transform2(outputs, action_error=action_error)
-            elif 'fake' in ftype:#ftype == 'learned-reinforce-3factor-scalar-fake' or ftype == 'learned-reinforce-3factor-scalar-fake-noaction' or ftype == 'learned-reinforce-3factor-scalar-fake-withstate':
+            elif ftype == 'learned-reinforce-3factor-scalar-fake' or ftype == 'learned-reinforce-3factor-scalar-fake-noaction' or ftype == 'learned-reinforce-3factor-scalar-fake-withstate':
                 action_error = (rb_action - policy.action) ** 2
                 return self._objective_error_transform2(outputs, action_error=action_error, fake=True)
-            elif 'rank1' in ftype:#ftype == 'learned-reinforce-3factor-scalar-rank1' or ftype == 'learned-reinforce-3factor-scalar-rank1-noaction' or ftype == 'learned-reinforce-3factor-scalar-rank1-withstate':
-                action_error = (rb_action - policy.action) ** 2
-                return self._objective_error_transform2(outputs, action_error=action_error, rank1=True)
-            else: #unsupported
-                assert False
-                #return self._objective_error_transform(outputs)
+            else:
+                return self._objective_error_transform(outputs)
                 #a_mod =self.obj_func(outputs, rb_action.shape[-1]).out# mlp(outputs, rb_action.shape[-1], -1, -1, None, False).out
             '''
                 action_error = tf.reduce_mean(tf.stop_gradient(a_mod) * ((rb_action - policy.action) ** 2), axis=-1)
@@ -439,7 +413,7 @@ class Objective:
             future_policy = policy(x, seq_len=seq_len)
             replace_manager.replace_dict = None
             # Estimate the final policy value
-            future_policy_value = agent.main.critic(x, future_policy.action) * seq_mask
+            future_policy_value = self.ground_truth_critic(x, future_policy.action) * seq_mask
 
             if create_summary:
                 orig_policy = policy(x_s[-1], seq_len=seq_len_s[-1])

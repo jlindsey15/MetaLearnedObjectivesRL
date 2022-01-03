@@ -22,6 +22,8 @@ tf.logging.set_verbosity(tf.logging.ERROR)
 class LLFSExperiment(ExtendedTrainable):
 
     def _setup(self, config):
+        #assert False
+        print('setting up experiment')
         self.target_timesteps = 1
         logger.warning('Starting experiment')
 
@@ -40,9 +42,11 @@ class LLFSExperiment(ExtendedTrainable):
 
         self.agents = [ray_workers.AgentWorker.remote(i, agent_configs[i], self.logdir) for i in range(dconfig.agent_count)]
         logger.warning('Setting up agents')
+        print('setting up agents')
         # [ray] There is no way to wait for the actors to finalize initialization, thus we put this in a setup method
         ray.wait([agent.setup.remote() for agent in self.agents], num_returns=dconfig.agent_count)
         logger.warning('Created agents')
+        print('created agents')
 
         if dconfig.restore_count:
             self._restore_from_specification(dconfig, agent_configs)
@@ -58,6 +62,7 @@ class LLFSExperiment(ExtendedTrainable):
             logger.warning('Synced objective function')
 
     def _restore_from_specification(self, dconfig, agent_configs):
+        print('restoring from spec')
         """
         Restores policies, critics, and / or objective functions from checkpoints
         """
@@ -79,6 +84,7 @@ class LLFSExperiment(ExtendedTrainable):
                 :param num: The maximum number of checkpoints to use
                 :return: A list of checkpoint paths
                 """
+                print('HIIIIII THIS IS THE BASE PATH', base_path)
                 paths = tf.train.get_checkpoint_state(base_path).all_model_checkpoint_paths
                 paths = np.array(paths)
                 if stop > 0:
@@ -98,6 +104,8 @@ class LLFSExperiment(ExtendedTrainable):
         """
         Run config.steps episodes of training, then return control to ray
         """
+        print('training')
+
 
         timesteps_total = self._timesteps_total or 0
         timesteps_this_iter = 0
@@ -158,6 +166,7 @@ class LLFSExperiment(ExtendedTrainable):
                 'config': self.config}
 
     def _stop(self):
+        print('stopping')
         self.summary_writer.close()
         ray.wait([agent.stop.remote() for agent in self.agents], num_returns=self.dconfig.agent_count)
         del self.agents
@@ -165,11 +174,13 @@ class LLFSExperiment(ExtendedTrainable):
             del self.server
 
     def _save(self, checkpoint_dir):
+        print('saving')
         prefixes = ray.get([agent.save.remote(f'{checkpoint_dir}/agent_{i}', self._timesteps_total)
                             for i, agent in enumerate(self.agents)])
         return {"prefixes": prefixes}
 
     def _restore(self, checkpoint_data):
+        print('restoring')
         prefixes = checkpoint_data["prefixes"]
         ray.wait([agent.restore.remote(prefix) for agent, prefix in zip(self.agents, prefixes)],
                  num_returns=self.dconfig.agent_count)
@@ -187,23 +198,31 @@ def init_ray(redis_address=None):
     if redis_address:
         ray.init(redis_address=redis_address)
     else:
-        mem = 1000 * 1000 * 1000  # 1 GB
-        ray.init(object_store_memory=mem, redis_max_memory=mem, temp_dir='/tmp/metagenrl/ray')
+        mem = 20*1000 * 1000 * 1000  # 1 GB
+        ray.init(object_store_memory=mem, redis_max_memory=mem, temp_dir='/tmp/metagenrl/ray',
+                include_webui=True)#, webui_host="0.0.0.0")
 
 
-def run(config, run_name='metagenrl', timesteps=700 * 1000, samples=1):
+def run(config, run_name='metagenrl', timesteps=200*1000, samples=1):
+    import tensorflow as tf
     tune.register_trainable(run_name, LLFSExperiment)
     trial_gpus = count_required_gpus(config)
+    print('gpus')
     print(f'Requiring {trial_gpus} extra gpus.')
     train_spec = {
         'run': run_name,
-        'resources_per_trial': {'cpu': 0, 'gpu': 0, 'extra_gpu': trial_gpus},
+        'resources_per_trial': {'cpu': 1, 'gpu': 0, 'extra_gpu': trial_gpus},
         'stop': {'timesteps_total': timesteps},
         'config': config,
         'num_samples': samples,
+        'checkpoint_freq': 1,
+        #'keep_checkpoints_num': 5,
         'checkpoint_at_end': True,
     }
+    print('yo')
     tune.run_experiments({'metagenrl': train_spec})
+    print('beep')
+    
 
 
 def train(args):
@@ -212,16 +231,22 @@ def train(args):
     """
     config = configs.base(agent_count=20)
     config.update({
+        'obj_func_type': args.objective_type,
         'env_name': [
-            'LunarLanderContinuous-v2',
+            #'Reacher-v2'
+            #'LunarLanderContinuous-v2',
+            #'Hopper-v2',
             'HalfCheetah-v2',
+        
         ],
+        'policy_reset_prob': args.reset_prob
     })
 
-    run(config, run_name='public-CheetahLunar')
+    run(config, run_name=f'public-{args.name}')
 
 
 def test(args):
+    import tensorflow as tf
     """
     Performs meta-test training
     """
@@ -229,10 +254,32 @@ def test(args):
     config = configs.test(args.objective, chkp=args.chkp)
     config.update({
         'name': args.name,
+        'obj_func_type': args.objective_type,
         'env_name': tune.grid_search([
-            'Hopper-v2',
+            #'Reacher-v2'
+            #'Hopper-v2',
             'HalfCheetah-v2',
-            'LunarLanderContinuous-v2',
+            #'LunarLanderContinuous-v2',
+        ]),
+    })
+
+    run(config, run_name=f'test-public-{args.name}-chkp{args.chkp}', samples=1)
+    
+    
+def reinforce_test(args):
+    import tensorflow as tf
+    """
+    Performs meta-test training
+    """
+    config = configs.reinforce_test()
+    config.update({
+        'name': args.name,
+        #'obj_func_type': args.objective_type,
+        'env_name': tune.grid_search([
+            #'Reacher-v2'
+            #'Hopper-v2',
+            'HalfCheetah-v2',
+            #'LunarLanderContinuous-v2',
         ]),
     })
 
@@ -241,15 +288,19 @@ def test(args):
 
 if __name__ == '__main__':
     FUNCTION_MAP = {'train': train,
-                    'test': test}
+                    'test': test,
+                   'reinforce_test': reinforce_test}
 
     parser = argparse.ArgumentParser()
     parser.add_argument('command', choices=FUNCTION_MAP.keys())
     parser.add_argument('--redis', dest='redis_address', action='store', type=str)
     parser.add_argument('--objective', action='store', type=str)
+    parser.add_argument('--objective_type', action='store', type=str)
     parser.add_argument('--name', action='store', type=str)
     parser.add_argument('--chkp', action='store', type=int, default=-1)
+    parser.add_argument('--reset_prob', action='store', type=float, default=0.000005)
     parsed_args = parser.parse_args()
     init_ray(parsed_args.redis_address)
     func = FUNCTION_MAP[parsed_args.command]
     func(parsed_args)
+ 
