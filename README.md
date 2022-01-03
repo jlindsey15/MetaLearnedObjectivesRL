@@ -1,4 +1,4 @@
-Based off https://github.com/louiskirsch/metagenrl
+Based on https://github.com/louiskirsch/metagenrl
 
 ## Installation
 
