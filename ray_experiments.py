@@ -40,7 +40,10 @@ class LLFSExperiment(ExtendedTrainable):
             'env_name': config['env_name'][i % env_count]
         }) for i in range(dconfig.agent_count)]
 
+        
+        #creating parallel worker agents (default: 20)
         self.agents = [ray_workers.AgentWorker.remote(i, agent_configs[i], self.logdir) for i in range(dconfig.agent_count)]
+        
         logger.warning('Setting up agents')
         print('setting up agents')
         # [ray] There is no way to wait for the actors to finalize initialization, thus we put this in a setup method
@@ -119,7 +122,7 @@ class LLFSExperiment(ExtendedTrainable):
 
         for _ in range(self.dconfig.steps):
             # Collect experience
-            simulation_objs = [agent.simulate.remote(t, self.target_timesteps) for agent in self.agents]
+            simulation_objs = [agent.simulate.remote(t, self.target_timesteps) for agent in self.agents] #run agents for a bunch of steps
             interaction_lengths, shortest_episodes, rewards = zip(*ray.get(simulation_objs))
             max_interaction_length = max(interaction_lengths)
             self.target_timesteps = max(shortest_episodes)
@@ -142,6 +145,7 @@ class LLFSExperiment(ExtendedTrainable):
 
                 for idx, agent in enumerate(self.agents):
                     # Issue agent update commands remotely
+                    #Update agent policies and critics
                     agent.update.remote(t, critic=True, policy=should_update_policy,
                                         var_oid=var_oid, grad_oid=grad_oids[idx],
                                         objective_local=should_update_objective_local,
@@ -150,6 +154,7 @@ class LLFSExperiment(ExtendedTrainable):
                 if should_update_objective_grads:
                     var_oid = utils.plasma_create_id()
                     # Issue agent gradient merge and application remotely
+                    #Update meta-learned loss function
                     self.server.apply_gradients.remote(grad_oids, var_oid)
 
         if self.dconfig.agent_count > 1:
@@ -203,7 +208,8 @@ def init_ray(redis_address=None):
                 include_webui=True)#, webui_host="0.0.0.0")
 
 
-def run(config, run_name='metagenrl', timesteps=200*1000, samples=1):
+def run(config, run_name='metagenrl', timesteps=0, samples=1):
+    
     import tensorflow as tf
     tune.register_trainable(run_name, LLFSExperiment)
     trial_gpus = count_required_gpus(config)
@@ -229,20 +235,26 @@ def train(args):
     """
     Performs meta-training
     """
-    config = configs.base(agent_count=20)
+    config = configs.base(agent_count=args.agent_count)
     config.update({
         'obj_func_type': args.objective_type,
         'env_name': [
+            args.env_name
             #'Reacher-v2'
+            #'Ant-v2',
             #'LunarLanderContinuous-v2',
             #'Hopper-v2',
-            'HalfCheetah-v2',
+            #'HalfCheetah-v2',
+            #'Humanoid-v2',
+            #'Walker2d-v2'
         
         ],
-        'policy_reset_prob': args.reset_prob
+        'policy_reset_prob': args.reset_prob,
+        'policy_reset_after_low': args.reset_after_low,
+        'policy_reset_after_high': args.reset_after_high,
     })
 
-    run(config, run_name=f'public-{args.name}')
+    run(config, timesteps=args.timesteps, run_name=f'public-{args.name}')
 
 
 def test(args):
@@ -256,14 +268,21 @@ def test(args):
         'name': args.name,
         'obj_func_type': args.objective_type,
         'env_name': tune.grid_search([
+            args.env_name
             #'Reacher-v2'
+            #'Ant-v2',
             #'Hopper-v2',
-            'HalfCheetah-v2',
+            #'HalfCheetah-v2',
             #'LunarLanderContinuous-v2',
+            #'Humanoid-v2',
+            #'Walker2d-v2'
         ]),
+        
+        'policy_reset_after_low': 1e9,
+        'policy_reset_after_high': 1e10,
     })
 
-    run(config, run_name=f'test-public-{args.name}-chkp{args.chkp}', samples=1)
+    run(config, timesteps=args.timesteps, run_name=f'test-public-{args.name}-chkp{args.chkp}', samples=1)
     
     
 def reinforce_test(args):
@@ -276,14 +295,20 @@ def reinforce_test(args):
         'name': args.name,
         #'obj_func_type': args.objective_type,
         'env_name': tune.grid_search([
+            args.env_name
             #'Reacher-v2'
+            #'Ant-v2',
             #'Hopper-v2',
-            'HalfCheetah-v2',
+            #'HalfCheetah-v2',
             #'LunarLanderContinuous-v2',
+            #'Humanoid-v2',
+            #'Walker2d-v2'
         ]),
+        'policy_reset_after_low': 1e9,
+        'policy_reset_after_high': 1e10,
     })
 
-    run(config, run_name=f'test-public-{args.name}-chkp{args.chkp}', samples=1)
+    run(config, timesteps=args.timesteps, run_name=f'test-public-{args.name}-chkp{args.chkp}', samples=1)
 
 
 if __name__ == '__main__':
@@ -296,11 +321,15 @@ if __name__ == '__main__':
     parser.add_argument('--redis', dest='redis_address', action='store', type=str)
     parser.add_argument('--objective', action='store', type=str)
     parser.add_argument('--objective_type', action='store', type=str)
+    parser.add_argument('--env_name', action='store', type=str)
     parser.add_argument('--name', action='store', type=str)
     parser.add_argument('--chkp', action='store', type=int, default=-1)
-    parser.add_argument('--reset_prob', action='store', type=float, default=0.000005)
+    parser.add_argument('--reset_prob', action='store', type=float, default=0.0)
+    parser.add_argument('--reset_after_low', action='store', type=int, default=0)
+    parser.add_argument('--reset_after_high', action='store', type=int, default=0)
+    parser.add_argument('--agent_count', action='store', type=int, default=20)
+    parser.add_argument('--timesteps', action='store', type=int, default=20)
     parsed_args = parser.parse_args()
     init_ray(parsed_args.redis_address)
     func = FUNCTION_MAP[parsed_args.command]
     func(parsed_args)
- 

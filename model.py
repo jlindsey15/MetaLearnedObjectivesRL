@@ -75,8 +75,8 @@ class Agent:
         with tf.variable_scope(None, 'agent'):
             self.main = self._create('main')
             self.target = self._create('target')
-            #self.ground_truth = self._create_gt('ground_truth_m')
-            #self.ground_truth_target = self._create_gt('ground_truth_t')
+            self.ground_truth = self._create_gt('ground_truth_m')
+            self.ground_truth_target = self._create_gt('ground_truth_t')
 
     def _create(self, scope):
         with tf.variable_scope(scope):
@@ -439,7 +439,7 @@ class Objective:
             future_policy = policy(x, seq_len=seq_len)
             replace_manager.replace_dict = None
             # Estimate the final policy value
-            future_policy_value = agent.main.critic(x, future_policy.action) * seq_mask
+            future_policy_value = agent.ground_truth.critic(x, future_policy.action) * seq_mask
 
             if create_summary:
                 orig_policy = policy(x_s[-1], seq_len=seq_len_s[-1])

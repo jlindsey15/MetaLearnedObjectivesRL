@@ -123,7 +123,9 @@ def base(agent_count=8):
         'policy_update_start': 0,
         'policy_clip': True,
         'policy_exploration': 0.1,
-        'policy_reset_prob': 0.000005,
+        'policy_reset_prob': 0,
+        'policy_reset_after_low': 0,
+        'policy_reset_after_high': 0,
         'policy_random_exploration_steps': 10 * 1000,
 
         'obj_func_enabled': True,
