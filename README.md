@@ -1,4 +1,4 @@
-Based off https://github.com/louiskirsch/metagenrl
+Based on https://github.com/louiskirsch/metagenrl
 
 ## Installation
 
@@ -17,42 +17,23 @@ python3 -c 'import ray; from pyarrow import plasma as plasma; plasma.build_plasm
 
 ## Meta Training
 
-Adapt the configuration in `ray_experiments.py` (or use the default configuration) and run
 
 ```bash
-python3 ray_experiments.py train
+python3 ray_experiments.py train --objective_type OBJECTIVE_TYPE --reset_prob 0.0
 ```
 
+Example OBJECTIVE_TYPE: learned-withstate-rank1
 By default, this requires a local machine with 4 GPUs to run 20 agents in parallel.
-Alternatively, skip this and download a pre-trained objective function as described below.
 
 ## Meta Testing
 
-After running meta-training (or downloading a pre-trained objective function)
-you can train a new agent from scratch on an environment of your choice.
-Optionally configure your training in `ray_experiments.py`, then run
 
 ```bash
-python3 ray_experiments.py test --objective TRAINING_DIRECTORY
+python3.6 ray_experiments.py test --objective_type learned-reinforce-3factor-scalar-withstate --objective TRAINING_DIRECTORY --chkp -1 --name DESIRED_NAME_FOR_EVALUATION_LOGS
 ```
+
+TRAINING_DIRECTORY will look something like public-None_cd08d900_2021-12-22_02-07-18cep_yk9o
 
 This only requires a single GPU on your machine.
 
-## Using a pre-trained objective function
 
-Download a pre-trained objective function,
-
-```bash
-cd ~/ray_results/metagenrl
-curl https://github.com/timediv/metagenrl/releases/download/pretrained-v1/CheetahLunar.tgz|tar xvz
-```
-
-and proceed with meta testing as above.
-In this case your `TRAINING_DIRECTORY` will be `pretrained-CheetahLunar`.
-
-## Visualization
-
-Many tf summaries are written during training and testing and can be visualized with tensorboard
-```bash
-tensorboard --logdir ~/ray_results/metagenrl
-```
